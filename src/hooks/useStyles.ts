@@ -19,6 +19,9 @@ export function useStyles() {
     'text-brand': { color: colors.brand },
     'border-brand': { borderColor: colors.brand },
     'border-gray': { borderColor: colors.borderGray },
+    'bg-header': { backgroundColor: colors.headerBg },
+    'bg-screen': { backgroundColor: colors.screenBg },
+    'text-slate': { color: colors.slate500 },
   };
 
   // Fusionamos los estilos estáticos y los dinámicos del tema

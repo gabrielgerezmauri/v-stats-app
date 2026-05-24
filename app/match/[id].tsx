@@ -1,0 +1,451 @@
+import React, { useState, useEffect } from "react";
+import { View, Text, TouchableOpacity, ScrollView, Modal, Dimensions } from "react-native";
+import { useRouter, useLocalSearchParams } from "expo-router";
+import { ArrowLeft, RotateCcw } from "lucide-react-native";
+import { useStyles } from "../../src/hooks/useStyles";
+import { StatusBar } from "expo-status-bar";
+
+type Player = { id: number; number: string; name: string; position: string; isLibero?: boolean; };
+type ActionRecord = { id: string; playerId: number; action: string; result: string; homeScoreBefore: number; awayScoreBefore: number; };
+type PlayerSetStats = { id: number; number: string; name: string; position: string; puntos: number; ataquesPts: number; saquesPts: number; bloqueosPts: number; recepciones: number; errores: number; };
+
+const initialCourtPlayers: Player[] = [
+  { id: 1, number: "5", name: "María González", position: "Opuesta" },
+  { id: 2, number: "12", name: "Ana Rodríguez", position: "Central" },
+  { id: 3, number: "8", name: "Laura Pérez", position: "Punta" },
+  { id: 4, number: "3", name: "Sofia Martínez", position: "Armadora" },
+  { id: 5, number: "7", name: "Carolina López", position: "Central" },
+  { id: 6, number: "10", name: "Valentina Silva", position: "Punta" },
+];
+
+const liberoPlayer: Player = { id: 7, number: "1", name: "Florencia Castro", position: "Líbero", isLibero: true };
+
+const initialBench: Player[] = [
+  { id: 8, number: "4", name: "Micaela Fernández", position: "Punta" },
+  { id: 9, number: "9", name: "Julieta Morales", position: "Central" },
+  { id: 10, number: "11", name: "Camila Ruiz", position: "Opuesta" },
+];
+
+const actions = [
+  { id: "recepcion", name: "RECEPCIÓN", icon: "🛡️" },
+  { id: "ataque", name: "ATAQUE", icon: "⚡" },
+  { id: "saque", name: "SAQUE", icon: "🎯" },
+  { id: "bloqueo", name: "BLOQUEO", icon: "🧱" },
+  { id: "defensa", name: "DEFENSA", icon: "🤸" },
+  { id: "error", name: "ERROR", icon: "❌" },
+];
+
+const results = [
+  { id: "dbl", symbol: "#", label: "DBL+", color: "#10B981" },
+  { id: "pos", symbol: "+", label: "POS", color: "#10B981" },
+  { id: "neut", symbol: "!", label: "NEUT", color: "#94A3B8" },
+  { id: "exc", symbol: "/", label: "EXC", color: "#94A3B8" },
+  { id: "neg", symbol: "–", label: "NEG", color: "#EF4444" },
+  { id: "err", symbol: "=", label: "ERR", color: "#EF4444" },
+];
+
+function initStats(players: Player[], libero: Player): Record<number, PlayerSetStats> {
+  const map: Record<number, PlayerSetStats> = {};
+  [...players, libero].forEach(p => { map[p.id] = { id: p.id, number: p.number, name: p.name, position: p.position, puntos: 0, ataquesPts: 0, saquesPts: 0, bloqueosPts: 0, recepciones: 0, errores: 0 }; });
+  return map;
+}
+
+function isSetOver(home: number, away: number, setNum: number): boolean {
+  const minScore = setNum === 5 ? 15 : 25;
+  return (home >= minScore || away >= minScore) && Math.abs(home - away) >= 2;
+}
+
+export default function LiveMatchScreen() {
+  const router = useRouter();
+  const { id, teamId } = useLocalSearchParams<{ id: string, teamId: string }>();
+  const { styles, colors } = useStyles();
+
+  const [courtPlayers, setCourtPlayers] = useState<Player[]>(initialCourtPlayers);
+  const [bench, setBench] = useState<Player[]>(initialBench);
+
+  const [homeScore, setHomeScore] = useState(0);
+  const [awayScore, setAwayScore] = useState(0);
+  const [currentSet, setCurrentSet] = useState(1);
+  const [setsWon, setSetsWon] = useState({ home: 0, away: 0 });
+
+  const [selectedPlayer, setSelectedPlayer] = useState<number | null>(null);
+  const [selectedAction, setSelectedAction] = useState<string | null>(null);
+  const [selectedResult, setSelectedResult] = useState<string | null>(null);
+
+  const [actionHistory, setActionHistory] = useState<ActionRecord[]>([]);
+  const [currentSetStats, setCurrentSetStats] = useState<Record<number, PlayerSetStats>>(initStats(initialCourtPlayers, liberoPlayer));
+
+  // Modales
+  const [showSubstitution, setShowSubstitution] = useState(false);
+  const [subStep, setSubStep] = useState<"out" | "in">("out");
+  const [playerOutId, setPlayerOutId] = useState<number | null>(null);
+
+  const [showEndSet, setShowEndSet] = useState(false);
+  const [pendingSetEnd, setPendingSetEnd] = useState<{ home: number; away: number; } | null>(null);
+  const [showSetResults, setShowSetResults] = useState(false);
+  const [completedSetStats, setCompletedSetStats] = useState<PlayerSetStats[]>([]);
+  const [matchOver, setMatchOver] = useState(false);
+
+  const canRegister = selectedPlayer !== null && selectedAction !== null && selectedResult !== null;
+
+  useEffect(() => {
+    if (!showEndSet && !showSetResults && (homeScore > 0 || awayScore > 0)) {
+      if (isSetOver(homeScore, awayScore, currentSet)) {
+        setPendingSetEnd({ home: homeScore, away: awayScore });
+        setShowEndSet(true);
+      }
+    }
+  }, [homeScore, awayScore]);
+
+  const applyScore = (newHome: number, newAway: number, record: ActionRecord) => {
+    setActionHistory((h) => [...h, record]);
+    setHomeScore(newHome);
+    setAwayScore(newAway);
+  };
+
+  const updatePlayerStat = (playerId: number, action: string, result: string, homePoint: boolean, awayPoint: boolean) => {
+    setCurrentSetStats((prev) => {
+      const s = { ...(prev[playerId] ?? { id: playerId, number: "", name: "", position: "", puntos: 0, ataquesPts: 0, saquesPts: 0, bloqueosPts: 0, recepciones: 0, errores: 0 }) };
+      if (action === "ataque" && result === "dbl") { s.ataquesPts++; s.puntos++; }
+      if (action === "saque" && result === "dbl") { s.saquesPts++; s.puntos++; }
+      if (action === "bloqueo" && result === "dbl") { s.bloqueosPts++; s.puntos++; }
+      if (action === "recepcion") s.recepciones++;
+      if (result === "err" && (action === "recepcion" || action === "ataque" || action === "saque")) s.errores++;
+      return { ...prev, [playerId]: s };
+    });
+  };
+
+  const handleRegister = () => {
+    if (!canRegister) return;
+    const homePoint = (selectedAction === "ataque" || selectedAction === "saque" || selectedAction === "bloqueo") && selectedResult === "dbl";
+    const awayPoint = (selectedAction === "recepcion" || selectedAction === "ataque" || selectedAction === "saque") && selectedResult === "err";
+    const record: ActionRecord = { id: Date.now().toString(), playerId: selectedPlayer!, action: selectedAction!, result: selectedResult!, homeScoreBefore: homeScore, awayScoreBefore: awayScore };
+    updatePlayerStat(selectedPlayer!, selectedAction!, selectedResult!, homePoint, awayPoint);
+    applyScore(homePoint ? homeScore + 1 : homeScore, awayPoint ? awayScore + 1 : awayScore, record);
+    setSelectedPlayer(null); setSelectedAction(null); setSelectedResult(null);
+  };
+
+  const handleRivalError = (type: "saque" | "ataque") => {
+    const record: ActionRecord = { id: Date.now().toString(), playerId: -1, action: `rival_${type}`, result: "error", homeScoreBefore: homeScore, awayScoreBefore: awayScore };
+    applyScore(homeScore + 1, awayScore, record);
+  };
+
+  const handleUndo = () => {
+    if (actionHistory.length === 0) return;
+    const last = actionHistory[actionHistory.length - 1];
+    setHomeScore(last.homeScoreBefore);
+    setAwayScore(last.awayScoreBefore);
+    setActionHistory((h) => h.slice(0, -1));
+    if (last.playerId > 0) {
+      setCurrentSetStats((prev) => {
+        const s = { ...(prev[last.playerId] ?? { id: last.playerId, number: "", name: "", position: "", puntos: 0, ataquesPts: 0, saquesPts: 0, bloqueosPts: 0, recepciones: 0, errores: 0 }) };
+        if (last.action === "ataque" && last.result === "dbl") { s.ataquesPts = Math.max(0, s.ataquesPts - 1); s.puntos = Math.max(0, s.puntos - 1); }
+        if (last.action === "saque" && last.result === "dbl") { s.saquesPts = Math.max(0, s.saquesPts - 1); s.puntos = Math.max(0, s.puntos - 1); }
+        if (last.action === "bloqueo" && last.result === "dbl") { s.bloqueosPts = Math.max(0, s.bloqueosPts - 1); s.puntos = Math.max(0, s.puntos - 1); }
+        if (last.action === "recepcion") s.recepciones = Math.max(0, s.recepciones - 1);
+        if (last.result === "err") s.errores = Math.max(0, s.errores - 1);
+        return { ...prev, [last.playerId]: s };
+      });
+    }
+  };
+
+  const confirmEndSet = () => {
+    const scored = pendingSetEnd ?? { home: homeScore, away: awayScore };
+    const homeWon = scored.home > scored.away;
+    const newSetsWon = { home: homeWon ? setsWon.home + 1 : setsWon.home, away: homeWon ? setsWon.away : setsWon.away + 1 };
+    setSetsWon(newSetsWon);
+    const allPlayers = [...courtPlayers, liberoPlayer];
+    const statsArr = allPlayers.map(p => currentSetStats[p.id] ?? { id: p.id, number: p.number, name: p.name, position: p.position, puntos: 0, ataquesPts: 0, saquesPts: 0, bloqueosPts: 0, recepciones: 0, errores: 0 });
+    setCompletedSetStats(statsArr);
+    setShowEndSet(false); setPendingSetEnd(null); setShowSetResults(true);
+  };
+
+  const startNextSet = () => {
+    if (setsWon.home >= 3 || setsWon.away >= 3) { setMatchOver(true); setShowSetResults(false); return; }
+    setHomeScore(0); setAwayScore(0); setCurrentSet((s) => s + 1); setActionHistory([]); setCurrentSetStats(initStats(courtPlayers, liberoPlayer)); setShowSetResults(false);
+  };
+
+  const openSubstitution = () => { setSubStep("out"); setPlayerOutId(null); setShowSubstitution(true); };
+  const handleSelectOut = (playerId: number) => { setPlayerOutId(playerId); setSubStep("in"); };
+  const handleSelectIn = (benchPlayer: Player) => {
+    if (playerOutId === null) return;
+    const outPlayer = courtPlayers.find(p => p.id === playerOutId);
+    if (!outPlayer) { setShowSubstitution(false); return; }
+    setCourtPlayers(prev => prev.map(p => p.id === playerOutId ? benchPlayer : p));
+    setBench(prev => prev.map(p => p.id === benchPlayer.id ? outPlayer : p));
+    setCurrentSetStats(prev => ({ ...prev, [benchPlayer.id]: prev[benchPlayer.id] ?? { id: benchPlayer.id, number: benchPlayer.number, name: benchPlayer.name, position: benchPlayer.position, puntos: 0, ataquesPts: 0, saquesPts: 0, bloqueosPts: 0, recepciones: 0, errores: 0 } }));
+    if (selectedPlayer === playerOutId) setSelectedPlayer(null);
+    setShowSubstitution(false);
+  };
+
+  return (
+    <View style={styles`flex-1 bg-screen`}>
+      <StatusBar style="light" />
+
+      {/* TOP DARK ZONE */}
+      <View style={[styles`bg-header flex-shrink-0`, { paddingTop: 50 }]}>
+        <View style={styles`flex-row items-center gap-2 px-4 pt-3 pb-2`}>
+          <TouchableOpacity onPress={() => router.back()} style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: 'rgba(255,255,255,0.1)', justifyContent: 'center', alignItems: 'center' }}>
+            <ArrowLeft size={16} color="#fff" />
+          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', flex: 1, gap: 6 }}>
+            {[1, 2, 3, 4, 5].map((set) => (
+              <View key={set} style={{ flex: 1, paddingVertical: 6, borderRadius: 16, alignItems: 'center', backgroundColor: currentSet === set ? '#1E6FD9' : set < currentSet ? 'rgba(255,255,255,0.2)' : 'transparent', borderWidth: set > currentSet ? 1 : 0, borderColor: 'rgba(255,255,255,0.15)' }}>
+                <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 13, letterSpacing: 0.5, color: '#fff' }}>{set < currentSet ? `${set}✓` : `S${set}`}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        <View style={styles`flex-row items-center justify-between px-5 pb-1`}>
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 11, letterSpacing: 1, color: 'rgba(255,255,255,0.6)' }}>EQUIPO LOCAL</Text>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 54, fontWeight: '700', lineHeight: 60, color: '#3D8EF5' }}>{homeScore}</Text>
+          </View>
+          <View style={{ flex: 1, alignItems: 'center', gap: 4 }}>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 13, letterSpacing: 2, color: 'rgba(255,255,255,0.4)' }}>VS</Text>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 16, fontWeight: '700', color: 'rgba(255,255,255,0.9)' }}>{setsWon.home} – {setsWon.away}</Text>
+            <TouchableOpacity disabled={actionHistory.length === 0} onPress={handleUndo} style={{ flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12, backgroundColor: actionHistory.length > 0 ? '#F97316' : 'rgba(255,255,255,0.1)', opacity: actionHistory.length > 0 ? 1 : 0.4 }}>
+              <RotateCcw size={12} color="#fff" />
+              <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 10, letterSpacing: 0.5, color: '#fff' }}>DESHACER</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={{ flex: 1, alignItems: 'flex-end' }}>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 11, letterSpacing: 1, color: 'rgba(255,255,255,0.6)' }}>VISITANTE</Text>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 54, fontWeight: '700', lineHeight: 60, color: '#fff' }}>{awayScore}</Text>
+          </View>
+        </View>
+
+        <View style={styles`items-center px-4 pb-3`}>
+          <TouchableOpacity onPress={() => { setPendingSetEnd({ home: homeScore, away: awayScore }); setShowEndSet(true); }} style={{ width: '100%', borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', borderRadius: 8, paddingVertical: 8, alignItems: 'center' }}>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 13, letterSpacing: 1.5, color: '#fff' }}>FIN DE SET MANUAL</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
+      {/* BOTTOM LIGHT ZONE */}
+      <ScrollView contentContainerStyle={{ padding: 16, gap: 12 }}>
+        
+        {/* ① JUGADORES */}
+        <View>
+          <View style={styles`flex-row justify-between items-center mb-2`}>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 15, fontWeight: '600', letterSpacing: 0.5, color: '#0D1F33' }}>① JUGADOR EN CANCHA</Text>
+            <TouchableOpacity onPress={openSubstitution} style={{ backgroundColor: '#1E6FD9', paddingHorizontal: 12, paddingVertical: 4, borderRadius: 6 }}>
+              <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 11, letterSpacing: 1, color: '#fff' }}>CAMBIO →</Text>
+            </TouchableOpacity>
+          </View>
+          <View style={styles`flex-row flex-wrap justify-between gap-2 mb-2`}>
+            {courtPlayers.map((player) => (
+              <TouchableOpacity key={player.id} onPress={() => setSelectedPlayer(player.id)} style={[styles`w-1/3 bg-white rounded-lg p-2`, { borderWidth: 2, borderColor: selectedPlayer === player.id ? '#1E6FD9' : 'transparent', backgroundColor: selectedPlayer === player.id ? 'rgba(30,111,217,0.05)' : '#fff' }]}>
+                <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 24, fontWeight: '700', color: '#1E6FD9', lineHeight: 28 }}>{player.number}</Text>
+                <Text style={{ fontSize: 10, fontWeight: '500', color: '#0D1F33' }} numberOfLines={1}>{player.name}</Text>
+                <Text style={{ fontSize: 9, color: '#64748B' }}>{player.position}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+          <TouchableOpacity onPress={() => setSelectedPlayer(liberoPlayer.id)} style={{ width: '100%', backgroundColor: '#0D1F33', borderRadius: 8, padding: 12, flexDirection: 'row', alignItems: 'center', gap: 8, borderWidth: 2, borderColor: selectedPlayer === liberoPlayer.id ? '#1E6FD9' : 'transparent' }}>
+            <View style={{ backgroundColor: '#1E6FD9', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 4 }}>
+              <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 12, fontWeight: '700', color: '#fff' }}>L</Text>
+            </View>
+            <View>
+              <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 15, fontWeight: '600', color: '#fff' }}>{liberoPlayer.number} - {liberoPlayer.name}</Text>
+              <Text style={{ fontSize: 10, color: 'rgba(255,255,255,0.65)' }}>{liberoPlayer.position}</Text>
+            </View>
+          </TouchableOpacity>
+        </View>
+
+        {/* ② ACCIÓN */}
+        <View>
+          <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 15, fontWeight: '600', letterSpacing: 0.5, color: '#0D1F33', marginBottom: 8 }}>② ACCIÓN</Text>
+          <View style={styles`flex-row flex-wrap justify-between gap-1.5`}>
+            {actions.map((action) => (
+              <TouchableOpacity key={action.id} onPress={() => setSelectedAction(action.id)} style={[styles`w-1/6 bg-white rounded-lg items-center justify-center py-2`, { borderWidth: 2, borderColor: selectedAction === action.id ? '#1E6FD9' : 'transparent', backgroundColor: selectedAction === action.id ? 'rgba(30,111,217,0.05)' : '#fff' }]}>
+                <Text style={{ fontSize: 18 }}>{action.icon}</Text>
+                <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 8, letterSpacing: 0.3, color: '#0D1F33', marginTop: 3 }}>{action.name}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* ③ RESULTADO */}
+        <View>
+          <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 15, fontWeight: '600', letterSpacing: 0.5, color: '#0D1F33', marginBottom: 8 }}>③ RESULTADO</Text>
+          <View style={styles`flex-row flex-wrap justify-between gap-1.5 mb-3`}>
+            {results.map((result) => (
+              <TouchableOpacity key={result.id} onPress={() => setSelectedResult(result.id)} style={[styles`w-1/6 items-center justify-center py-2 rounded-lg`, { backgroundColor: result.color, borderWidth: 2, borderColor: selectedResult === result.id ? '#0D1F33' : 'transparent' }]}>
+                <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 18, fontWeight: '700', color: '#fff' }}>{result.symbol}</Text>
+                <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 8, color: '#fff' }}>{result.label}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Hint Line */}
+          {selectedAction && selectedResult && (
+            <View style={{ backgroundColor: ((selectedAction === "ataque" || selectedAction === "saque" || selectedAction === "bloqueo") && selectedResult === "dbl") ? '#DCFCE7' : ((selectedAction === "recepcion" || selectedAction === "ataque" || selectedAction === "saque") && selectedResult === "err") ? '#FEE2E2' : '#F4F7FB', padding: 8, borderRadius: 8, alignItems: 'center', marginBottom: 8 }}>
+               <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 12, letterSpacing: 0.5, color: ((selectedAction === "ataque" || selectedAction === "saque" || selectedAction === "bloqueo") && selectedResult === "dbl") ? '#15803D' : ((selectedAction === "recepcion" || selectedAction === "ataque" || selectedAction === "saque") && selectedResult === "err") ? '#DC2626' : '#64748B' }}>
+                {((selectedAction === "ataque" || selectedAction === "saque" || selectedAction === "bloqueo") && selectedResult === "dbl") ? "✅ PUNTO PROPIO" : ((selectedAction === "recepcion" || selectedAction === "ataque" || selectedAction === "saque") && selectedResult === "err") ? "❌ PUNTO RIVAL" : "—"}
+               </Text>
+            </View>
+          )}
+
+          <TouchableOpacity disabled={!canRegister} onPress={handleRegister} style={{ width: '100%', backgroundColor: canRegister ? '#1E6FD9' : 'rgba(30,111,217,0.3)', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginBottom: 8 }}>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 14, letterSpacing: 1.5, color: '#fff', fontWeight: '700' }}>REGISTRAR ACCIÓN</Text>
+          </TouchableOpacity>
+
+          <View style={styles`flex-row gap-2`}>
+            <TouchableOpacity onPress={() => handleRivalError("saque")} style={{ flex: 1, backgroundColor: '#0D1F33', paddingVertical: 10, borderRadius: 8, alignItems: 'center' }}>
+              <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 12, color: '#fff' }}>🚀 ERR. SAQUE RIVAL</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => handleRivalError("ataque")} style={{ flex: 1, backgroundColor: '#0D1F33', paddingVertical: 10, borderRadius: 8, alignItems: 'center' }}>
+              <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 12, color: '#fff' }}>💥 ERR. ATAQUE RIVAL</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+      </ScrollView>
+
+      {/* ── Substitution Modal ── */}
+      <Modal visible={showSubstitution} transparent animationType="slide">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' }}>
+          <View style={{ backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, maxHeight: Dimensions.get('window').height * 0.8 }}>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 20, fontWeight: '700', marginBottom: 16 }}>{subStep === "out" ? "¿Quién sale?" : "¿Quién entra?"}</Text>
+            
+            <ScrollView style={{ maxHeight: 300 }}>
+              {subStep === "out" ? (
+                courtPlayers.map((player) => (
+                  <TouchableOpacity key={player.id} onPress={() => handleSelectOut(player.id)} style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, marginBottom: 8 }}>
+                    <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(239,68,68,0.1)', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                      <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 18, fontWeight: '700', color: '#EF4444' }}>{player.number}</Text>
+                    </View>
+                    <View>
+                      <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 16, fontWeight: '600', color: '#0D1F33' }}>{player.name}</Text>
+                      <Text style={{ fontSize: 12, color: '#64748B' }}>{player.position}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))
+              ) : (
+                <View>
+                  <Text style={{ fontSize: 13, color: '#64748B', marginBottom: 8 }}>Sale: <Text style={{ fontWeight: 'bold' }}>{courtPlayers.find(p => p.id === playerOutId)?.name}</Text></Text>
+                  {bench.length === 0 ? (
+                    <Text style={{ textAlign: 'center', paddingVertical: 24, color: '#94A3B8' }}>No hay jugadoras en el banco</Text>
+                  ) : (
+                    bench.map((player) => (
+                      <TouchableOpacity key={player.id} onPress={() => handleSelectIn(player)} style={{ flexDirection: 'row', alignItems: 'center', padding: 12, borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 8, marginBottom: 8 }}>
+                        <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(30,111,217,0.1)', justifyContent: 'center', alignItems: 'center', marginRight: 12 }}>
+                          <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 18, fontWeight: '700', color: '#1E6FD9' }}>{player.number}</Text>
+                        </View>
+                        <View>
+                          <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 16, fontWeight: '600', color: '#0D1F33' }}>{player.name}</Text>
+                          <Text style={{ fontSize: 12, color: '#64748B' }}>{player.position}</Text>
+                        </View>
+                      </TouchableOpacity>
+                    ))
+                  )}
+                </View>
+              )}
+            </ScrollView>
+            <TouchableOpacity onPress={() => setShowSubstitution(false)} style={{ width: '100%', borderWidth: 1, borderColor: '#E2E8F0', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginTop: 16 }}>
+              <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 16, fontWeight: '600' }}>CANCELAR</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── End Set Modal ── */}
+      <Modal visible={showEndSet} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 24, alignItems: 'center' }}>
+            <Text style={{ fontSize: 48, marginBottom: 12 }}>🏐</Text>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 24, fontWeight: '700', marginBottom: 8 }}>
+              {pendingSetEnd && pendingSetEnd.home > pendingSetEnd.away ? "¡Ganaron el Set!" : "¡Perdieron el Set!"}
+            </Text>
+            {pendingSetEnd && (
+              <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 36, fontWeight: '700', marginBottom: 8 }}>
+                <Text style={{ color: '#3D8EF5' }}>{pendingSetEnd.home}</Text>
+                <Text style={{ color: 'rgba(0,0,0,0.2)' }}> - </Text>
+                <Text>{pendingSetEnd.away}</Text>
+              </Text>
+            )}
+            <Text style={{ fontSize: 14, color: '#64748B', marginBottom: 24 }}>Set {currentSet} · Ver estadísticas y continuar</Text>
+            <View style={styles`flex-row gap-3`}>
+              <TouchableOpacity onPress={() => { setShowEndSet(false); setPendingSetEnd(null); }} style={{ flex: 1, borderWidth: 1, borderColor: '#E2E8F0', paddingVertical: 12, borderRadius: 8, alignItems: 'center' }}>
+                <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 16, fontWeight: '600' }}>CANCELAR</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={confirmEndSet} style={{ flex: 1, backgroundColor: '#1E6FD9', paddingVertical: 12, borderRadius: 8, alignItems: 'center' }}>
+                <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 16, fontWeight: '600', color: '#fff' }}>VER STATS</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Set Results Modal ── */}
+      <Modal visible={showSetResults} transparent animationType="slide">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 16 }}>
+          <View style={{ backgroundColor: '#F4F7FB', borderRadius: 24, padding: 16, maxHeight: Dimensions.get('window').height * 0.9 }}>
+            <View style={{ alignItems: 'center', marginBottom: 16 }}>
+              <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 22, fontWeight: '700', color: '#0D1F33' }}>Resultados — Set {currentSet}</Text>
+              <Text style={{ fontSize: 13, color: '#64748B', marginTop: 4 }}>Sets: <Text style={{ color: '#1E6FD9', fontWeight: 'bold' }}>{setsWon.home}</Text> - <Text style={{ fontWeight: 'bold' }}>{setsWon.away}</Text></Text>
+            </View>
+
+            <View style={[styles`flex-row pb-2`, { borderBottomWidth: 1, borderBottomColor: '#E2E8F0', marginBottom: 8 }]}>
+              <Text style={[styles`col-span-2`, { fontFamily: 'Barlow Condensed', fontSize: 12, color: '#94A3B8' }]}>JUGADORA</Text>
+              <Text style={[styles`w-1/6`, { fontFamily: 'Barlow Condensed', fontSize: 12, color: '#94A3B8', textAlign: 'center' }]}>PTS</Text>
+              <Text style={[styles`w-1/6`, { fontFamily: 'Barlow Condensed', fontSize: 12, color: '#94A3B8', textAlign: 'center' }]}>ATK</Text>
+              <Text style={[styles`w-1/6`, { fontFamily: 'Barlow Condensed', fontSize: 12, color: '#94A3B8', textAlign: 'center' }]}>SAQ</Text>
+              <Text style={[styles`w-1/6`, { fontFamily: 'Barlow Condensed', fontSize: 12, color: '#94A3B8', textAlign: 'center' }]}>ERR</Text>
+            </View>
+
+            <ScrollView style={{ maxHeight: 400 }}>
+              {completedSetStats.sort((a, b) => b.puntos - a.puntos).map((p) => (
+                <View key={p.id} style={[styles`flex-row items-center py-2`, { borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.05)' }]}>
+                  <View style={styles`col-span-2`}>
+                    <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 16, fontWeight: '600', color: '#0D1F33' }}>#{p.number}</Text>
+                    <Text style={{ fontSize: 10, color: '#64748B' }} numberOfLines={1}>{p.name.split(" ")[0]}</Text>
+                  </View>
+                  <Text style={[styles`w-1/6`, { fontFamily: 'Barlow Condensed', fontSize: 18, fontWeight: '700', textAlign: 'center', color: p.puntos > 0 ? '#1E6FD9' : '#CBD5E1' }]}>{p.puntos}</Text>
+                  <Text style={[styles`w-1/6`, { fontFamily: 'Barlow Condensed', fontSize: 16, textAlign: 'center', color: '#0D1F33' }]}>{p.ataquesPts}</Text>
+                  <Text style={[styles`w-1/6`, { fontFamily: 'Barlow Condensed', fontSize: 16, textAlign: 'center', color: '#0D1F33' }]}>{p.saquesPts}</Text>
+                  <Text style={[styles`w-1/6`, { fontFamily: 'Barlow Condensed', fontSize: 16, textAlign: 'center', color: p.errores > 0 ? '#EF4444' : '#CBD5E1' }]}>{p.errores}</Text>
+                </View>
+              ))}
+            </ScrollView>
+
+            <TouchableOpacity onPress={startNextSet} style={{ width: '100%', backgroundColor: '#1E6FD9', paddingVertical: 14, borderRadius: 8, alignItems: 'center', marginTop: 16 }}>
+              <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 16, fontWeight: '700', color: '#fff', letterSpacing: 1 }}>
+                {setsWon.home >= 3 || setsWon.away >= 3 ? "FINALIZAR PARTIDO" : `INICIAR SET ${currentSet + 1}`}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Match Over Modal ── */}
+      <Modal visible={matchOver} transparent animationType="fade">
+        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', padding: 24 }}>
+          <View style={{ backgroundColor: '#fff', borderRadius: 24, padding: 24, alignItems: 'center' }}>
+            <Text style={{ fontSize: 48, marginBottom: 16 }}>{setsWon.home > setsWon.away ? "🏆" : "💪"}</Text>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 26, fontWeight: '700', color: '#0D1F33', marginBottom: 8 }}>
+              {setsWon.home > setsWon.away ? "¡Partido Ganado!" : "Partido Finalizado"}
+            </Text>
+            <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 40, fontWeight: '700', marginBottom: 16 }}>
+              <Text style={{ color: '#3D8EF5' }}>{setsWon.home}</Text>
+              <Text style={{ color: 'rgba(0,0,0,0.2)' }}> - </Text>
+              <Text>{setsWon.away}</Text>
+            </Text>
+            <Text style={{ fontSize: 14, color: '#64748B', marginBottom: 24 }}>Resultado final en sets</Text>
+            <TouchableOpacity 
+                onPress={() => { 
+                    router.push(`/team/${teamId}`)
+                    setMatchOver(false)
+                }} 
+                style={{ width: '100%', backgroundColor: '#1E6FD9', paddingVertical: 14, borderRadius: 8, alignItems: 'center' }}
+            >
+              <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 14, fontWeight: '700', color: '#fff', letterSpacing: 1 }}>VER LISTA DE PARTIDOS</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
