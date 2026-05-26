@@ -33,7 +33,7 @@ export default function HomeScreen() {
   const handleAddTeam = () => {
     if (!teamName.trim()) return;
     // Llama al contexto
-    addTeam(activeProfile.id, { name: teamName.trim(), players: 0, matches: 0, record: '0-0' });
+    addTeam(activeProfile.id, { name: teamName.trim(), roster: [], matches: 0, record: '0-0' });
     setTeamName('');
     setShowAddTeam(false);
   }
@@ -119,7 +119,7 @@ export default function HomeScreen() {
                 <View style={styles`flex-row justify-between`}>
                   <View>
                     <Text style={{ fontSize: 12, color: '#64748B' }}>Jugadores</Text>
-                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#0D1F33' }}>{team.players}</Text>
+                    <Text style={{ fontSize: 16, fontWeight: '600', color: '#0D1F33' }}>{team.roster.length}</Text>
                   </View>
                   <View>
                     <Text style={{ fontSize: 12, color: '#64748B' }}>Partidos</Text>
