@@ -10,7 +10,7 @@ type Player = { id: number; number: string; name: string; position: string; isLi
 type ActionRecord = { id: string; playerId: number; action: string; result: string; homeScoreBefore: number; awayScoreBefore: number; };
 type PlayerSetStats = { id: number; number: string; name: string; position: string; puntos: number; ataquesPts: number; saquesPts: number; bloqueosPts: number; recepciones: number; errores: number; };
 
-const EMPTY_SLOTS = 7; // 6 starters + 1 libero
+const EMPTY_SLOTS = 8; // 6 starters + 2 liberos
 
 const actions = [
   { id: "recepcion", name: "RECEPCIÓN", icon: "🛡️" },
@@ -29,9 +29,9 @@ const results = [
   { id: "err", symbol: "=", label: "ERR", color: "#EF4444" },
 ];
 
-function initStats(players: Player[], libero: Player | null): Record<number, PlayerSetStats> {
+function initStats(players: Player[], liberos: Player[]): Record<number, PlayerSetStats> {
   const map: Record<number, PlayerSetStats> = {};
-  const all = libero ? [...players, libero] : players;
+  const all = [...players, ...liberos];
   all.forEach(p => { map[p.id] = { id: p.id, number: p.number, name: p.name, position: p.position, puntos: 0, ataquesPts: 0, saquesPts: 0, bloqueosPts: 0, recepciones: 0, errores: 0 }; });
   return map;
 }
@@ -66,7 +66,7 @@ export default function LiveMatchScreen() {
   const convocados = matchRosterIds ? fullRoster.filter(p => matchRosterIds.includes(p.id)) : fullRoster;
 
   const [courtPlayers, setCourtPlayers] = useState<Player[]>([]);
-  const [liberoPlayer, setLiberoPlayer] = useState<Player | null>(null);
+  const [liberoPlayers, setLiberoPlayers] = useState<Player[]>([]);
   const [bench, setBench] = useState<Player[]>([]);
 
   const [assignedSlots, setAssignedSlots] = useState<(Player | null)[]>(Array(EMPTY_SLOTS).fill(null));
@@ -127,13 +127,11 @@ export default function LiveMatchScreen() {
     if (courtPlayers.length > 0 || !assignedSlots.some(p => p !== null)) return;
 
     const starters = assignedSlots.slice(0, 6).filter((p): p is Player => p !== null);
-    const libero = assignedSlots[6];
+    const liberos = [assignedSlots[6], assignedSlots[7]].filter((p): p is Player => p !== null);
     setCourtPlayers(starters);
-    if (libero) {
-      setLiberoPlayer(libero);
-      setCurrentSetStats(initStats(starters, libero));
-    } else if (starters.length > 0) {
-      setCurrentSetStats(initStats(starters, starters[0]));
+    setLiberoPlayers(liberos);
+    if (starters.length > 0 || liberos.length > 0) {
+      setCurrentSetStats(initStats(starters, liberos));
     }
 
     // Build bench from convocados not already on court
@@ -172,7 +170,7 @@ export default function LiveMatchScreen() {
     const allPlayers = [
       ...courtPlayers,
       ...bench,
-      ...(liberoPlayer ? [liberoPlayer] : []),
+      ...liberoPlayers,
     ];
     const player = allPlayers.find((p) => p.id === last.playerId);
 
@@ -224,7 +222,7 @@ export default function LiveMatchScreen() {
     const homeWon = scored.home > scored.away;
     const newSetsWon = { home: homeWon ? setsWon.home + 1 : setsWon.home, away: homeWon ? setsWon.away : setsWon.away + 1 };
     setSetsWon(newSetsWon);
-    const allPlayers = liberoPlayer ? [...courtPlayers, liberoPlayer] : courtPlayers;
+    const allPlayers = [...courtPlayers, ...liberoPlayers];
     const statsArr = allPlayers.map(p => currentSetStats[p.id] ?? { id: p.id, number: p.number, name: p.name, position: p.position, puntos: 0, ataquesPts: 0, saquesPts: 0, bloqueosPts: 0, recepciones: 0, errores: 0 });
     setCompletedSetStats(statsArr);
     setShowEndSet(false); setPendingSetEnd(null); setShowSetResults(true);
@@ -233,7 +231,7 @@ export default function LiveMatchScreen() {
   const startNextSet = () => {
     if (setsWon.home >= 3 || setsWon.away >= 3) { setMatchOver(true); setShowSetResults(false); return; }
     setCourtPlayers([]);
-    setLiberoPlayer(null);
+    setLiberoPlayers([]);
     setBench([]);
     setAssignedSlots(Array(EMPTY_SLOTS).fill(null));
     setSelectedPlayer(null);
@@ -241,6 +239,36 @@ export default function LiveMatchScreen() {
   };
 
   const openSubstitution = () => { if (selectedPlayer === null) return; setPlayerOutId(selectedPlayer); setShowSubstitution(true); };
+  const handlePlayerPress = (playerId: number) => {
+    const isLiberoSelected = selectedPlayer !== null && liberoPlayers.some(l => l.id === selectedPlayer);
+    const isCourtSelected = selectedPlayer !== null && courtPlayers.some(p => p.id === selectedPlayer);
+    const isTappedLibero = liberoPlayers.some(l => l.id === playerId);
+    const isTappedCourt = courtPlayers.some(p => p.id === playerId);
+
+    // Libero selected + court player tapped → swap libero into court, court player → libero pool
+    if (isLiberoSelected && isTappedCourt) {
+      const libero = liberoPlayers.find(l => l.id === selectedPlayer)!;
+      const courtPlayer = courtPlayers.find(p => p.id === playerId)!;
+      setCourtPlayers(prev => prev.map(p => p.id === courtPlayer.id ? libero : p));
+      setLiberoPlayers(prev => prev.map(l => l.id === libero.id ? courtPlayer : l));
+      setSelectedPlayer(null);
+      return;
+    }
+
+    // Court player selected + libero tapped → swap libero into court, court player → libero pool
+    if (isCourtSelected && isTappedLibero) {
+      const courtPlayer = courtPlayers.find(p => p.id === selectedPlayer)!;
+      const libero = liberoPlayers.find(l => l.id === playerId)!;
+      setCourtPlayers(prev => prev.map(p => p.id === courtPlayer.id ? libero : p));
+      setLiberoPlayers(prev => prev.map(l => l.id === libero.id ? courtPlayer : l));
+      setSelectedPlayer(null);
+      return;
+    }
+
+    // Normal selection
+    setSelectedPlayer(playerId);
+  };
+
   const handleSelectIn = (benchPlayer: Player) => {
     if (playerOutId === null) return;
     const outPlayer = courtPlayers.find(p => p.id === playerOutId);
@@ -319,7 +347,7 @@ export default function LiveMatchScreen() {
                   return player ? (
                     <TouchableOpacity
                       key={`slot-${index}`}
-                      onPress={() => setSelectedPlayer(player.id)}
+                      onPress={() => handlePlayerPress(player.id)}
                       style={[styles`w-1/3 bg-white rounded-lg p-2`, { borderWidth: 2, borderColor: selectedPlayer === player.id ? '#1E6FD9' : 'transparent', backgroundColor: selectedPlayer === player.id ? 'rgba(30,111,217,0.05)' : '#fff' }]}
                     >
                       <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 24, fontWeight: '700', color: '#1E6FD9', lineHeight: 28 }}>{player.number}</Text>
@@ -339,48 +367,99 @@ export default function LiveMatchScreen() {
                 })}
               </View>
 
-              {assignedSlots[6] ? (
-                <View style={{ flexDirection: 'row', justifyContent: 'center' }}>
-                  <TouchableOpacity onPress={() => setSelectedPlayer(assignedSlots[6]!.id)} style={{ width: '31%', backgroundColor: '#FEF9C3', borderRadius: 8, padding: 8, borderWidth: 2, borderColor: selectedPlayer === assignedSlots[6]!.id ? '#1E6FD9' : '#FDE047', alignItems: 'center' }}>
-                    <View style={{ backgroundColor: '#FDE047', paddingHorizontal: 8, paddingVertical: 1, borderRadius: 4, marginBottom: 2 }}>
-                      <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 11, fontWeight: '700', color: '#92400E' }}>LÍBERO</Text>
-                    </View>
-                    <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 22, fontWeight: '700', color: '#92400E', lineHeight: 26 }}>{assignedSlots[6]!.number}</Text>
-                    <Text style={{ fontSize: 9, fontWeight: '500', color: '#0D1F33' }} numberOfLines={1}>{assignedSlots[6]!.name}</Text>
-                    <Text style={{ fontSize: 8, color: '#92400E' }}>{assignedSlots[6]!.position}</Text>
-                  </TouchableOpacity>
-                </View>
-              ) : (
-                <TouchableOpacity
-                  onPress={() => { setPickerSlotIndex(6); setShowRosterPicker(true); }}
-                  style={{ width: '100%', borderRadius: 8, padding: 12, borderWidth: 2, borderStyle: 'dashed', borderColor: '#1E6FD9', backgroundColor: 'rgba(30,111,217,0.05)', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}
-                >
-                  <Plus size={20} color="#1E6FD9" />
-                  <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 13, color: '#1E6FD9', fontWeight: '600' }}>AGREGAR LÍBERO</Text>
-                </TouchableOpacity>
-              )}
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                {[6, 7].map((slotIdx) => (
+                  assignedSlots[slotIdx] ? (
+                    <TouchableOpacity
+                      key={`libero-slot-${slotIdx}`}
+                      onPress={() => setSelectedPlayer(assignedSlots[slotIdx]!.id)}
+                      style={{
+                        flex: 1,
+                        backgroundColor: '#F8FAFC',
+                        borderRadius: 8,
+                        padding: 8,
+                        borderWidth: 2,
+                        borderColor: selectedPlayer === assignedSlots[slotIdx]!.id ? '#1E6FD9' : '#E2E8F0',
+                        alignItems: 'center',
+                      }}
+                    >
+                      <View style={{ backgroundColor: '#DBEAFE', paddingHorizontal: 8, paddingVertical: 1, borderRadius: 4, marginBottom: 2 }}>
+                        <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 11, fontWeight: '700', color: '#1E6FD9' }}>L{slotIdx - 5}</Text>
+                      </View>
+                      <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 22, fontWeight: '700', color: '#0D1F33', lineHeight: 26 }}>{assignedSlots[slotIdx]!.number}</Text>
+                      <Text style={{ fontSize: 9, fontWeight: '500', color: '#0D1F33' }} numberOfLines={1}>{assignedSlots[slotIdx]!.name}</Text>
+                      <Text style={{ fontSize: 8, color: '#64748B' }}>{assignedSlots[slotIdx]!.position}</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity
+                      key={`libero-empty-${slotIdx}`}
+                      onPress={() => { setPickerSlotIndex(slotIdx); setShowRosterPicker(true); }}
+                      style={{
+                        flex: 1,
+                        borderRadius: 8,
+                        padding: 12,
+                        borderWidth: 2,
+                        borderStyle: 'dashed',
+                        borderColor: slotIdx === 6 ? '#1E6FD9' : '#CBD5E1',
+                        backgroundColor: slotIdx === 6 ? 'rgba(30,111,217,0.05)' : 'rgba(0,0,0,0.02)',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        minHeight: 80,
+                      }}
+                    >
+                      <Plus size={20} color={slotIdx === 6 ? '#1E6FD9' : '#94A3B8'} />
+                      <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 10, color: slotIdx === 6 ? '#1E6FD9' : '#94A3B8', marginTop: 4, textAlign: 'center' }}>AGREGAR LÍBERO</Text>
+                    </TouchableOpacity>
+                  )
+                ))}
+              </View>
             </>
           ) : (
             <>
               <View style={styles`flex-row flex-wrap justify-between gap-2 mb-2`}>
                 {courtPlayers.map((player) => (
-                  <TouchableOpacity key={player.id} onPress={() => setSelectedPlayer(player.id)} style={[styles`w-1/3 bg-white rounded-lg p-2`, { borderWidth: 2, borderColor: selectedPlayer === player.id ? '#1E6FD9' : 'transparent', backgroundColor: selectedPlayer === player.id ? 'rgba(30,111,217,0.05)' : '#fff' }]}>
-                    <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 24, fontWeight: '700', color: '#1E6FD9', lineHeight: 28 }}>{player.number}</Text>
+                  <TouchableOpacity key={player.id} onPress={() => handlePlayerPress(player.id)} style={[styles`w-1/3 bg-white rounded-lg p-2`, { borderWidth: 2, borderColor: selectedPlayer === player.id ? '#1E6FD9' : 'transparent', backgroundColor: selectedPlayer === player.id ? 'rgba(30,111,217,0.05)' : '#fff' }]}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                      <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 24, fontWeight: '700', color: '#1E6FD9', lineHeight: 28 }}>{player.number}</Text>
+                      {player.isLibero && (
+                        <View style={{ backgroundColor: '#DBEAFE', paddingHorizontal: 5, paddingVertical: 0, borderRadius: 3 }}>
+                          <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 9, fontWeight: '700', color: '#1E6FD9' }}>L</Text>
+                        </View>
+                      )}
+                    </View>
                     <Text style={{ fontSize: 10, fontWeight: '500', color: '#0D1F33' }} numberOfLines={1}>{player.name}</Text>
-                    <Text style={{ fontSize: 9, color: '#64748B' }}>{player.position}</Text>
+                    <Text style={{ fontSize: 9, color: '#64748B' }}>{player.isLibero ? 'Líbero' : player.position}</Text>
                   </TouchableOpacity>
                 ))}
               </View>
-              {liberoPlayer && (
-                <View style={{ flexDirection: 'row', justifyContent: 'center' }}>
-                  <TouchableOpacity onPress={() => setSelectedPlayer(liberoPlayer.id)} style={{ width: '31%', backgroundColor: '#FEF9C3', borderRadius: 8, padding: 8, borderWidth: 2, borderColor: selectedPlayer === liberoPlayer.id ? '#1E6FD9' : '#FDE047', alignItems: 'center' }}>
-                    <View style={{ backgroundColor: '#FDE047', paddingHorizontal: 8, paddingVertical: 1, borderRadius: 4, marginBottom: 2 }}>
-                      <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 11, fontWeight: '700', color: '#92400E' }}>LÍBERO</Text>
-                    </View>
-                    <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 22, fontWeight: '700', color: '#92400E', lineHeight: 26 }}>{liberoPlayer.number}</Text>
-                    <Text style={{ fontSize: 9, fontWeight: '500', color: '#0D1F33' }} numberOfLines={1}>{liberoPlayer.name}</Text>
-                    <Text style={{ fontSize: 8, color: '#92400E' }}>{liberoPlayer.position}</Text>
-                  </TouchableOpacity>
+              {liberoPlayers.length > 0 && (
+                <View style={{ flexDirection: 'row', gap: 8 }}>
+                  {liberoPlayers.map((libero, idx) => (
+                    <TouchableOpacity
+                      key={libero.id}
+                      onPress={() => handlePlayerPress(libero.id)}
+                      style={{
+                        flex: 1,
+                        backgroundColor: '#F8FAFC',
+                        borderRadius: 8,
+                        padding: 8,
+                        borderWidth: 2,
+                        borderColor: selectedPlayer === libero.id ? '#1E6FD9' : '#E2E8F0',
+                        alignItems: 'center',
+                      }}
+                    >
+                      {libero.isLibero ? (
+                        <View style={{ backgroundColor: '#DBEAFE', paddingHorizontal: 8, paddingVertical: 1, borderRadius: 4, marginBottom: 2 }}>
+                          <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 11, fontWeight: '700', color: '#1E6FD9' }}>L{idx + 1}</Text>
+                        </View>
+                      ) : (
+                        <View style={{ height: 18 }} />
+                      )}
+                      <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 22, fontWeight: '700', color: '#0D1F33', lineHeight: 26 }}>{libero.number}</Text>
+                      <Text style={{ fontSize: 9, fontWeight: '500', color: '#0D1F33' }} numberOfLines={1}>{libero.name}</Text>
+                      <Text style={{ fontSize: 8, color: '#64748B' }}>{libero.isLibero ? 'Líbero' : libero.position}</Text>
+                    </TouchableOpacity>
+                  ))}
                 </View>
               )}
             </>
@@ -413,13 +492,13 @@ export default function LiveMatchScreen() {
           </View>
 
           {/* Hint Line */}
-          {selectedAction && selectedResult && (
+          {/* {selectedAction && selectedResult && (
             <View style={{ backgroundColor: ((selectedAction === "ataque" || selectedAction === "saque" || selectedAction === "bloqueo") && selectedResult === "dbl") ? '#DCFCE7' : selectedResult === "err" ? '#FEE2E2' : '#F4F7FB', padding: 8, borderRadius: 8, alignItems: 'center', marginBottom: 8 }}>
                <Text style={{ fontFamily: 'Barlow Condensed', fontSize: 12, letterSpacing: 0.5, color: ((selectedAction === "ataque" || selectedAction === "saque" || selectedAction === "bloqueo") && selectedResult === "dbl") ? '#15803D' : selectedResult === "err" ? '#DC2626' : '#64748B' }}>
                 {((selectedAction === "ataque" || selectedAction === "saque" || selectedAction === "bloqueo") && selectedResult === "dbl") ? "✅ PUNTO PROPIO" : selectedResult === "err" ? "❌ PUNTO RIVAL" : "—"}
                </Text>
             </View>
-          )}
+          )} */}
 
 
 
